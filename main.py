@@ -29,8 +29,8 @@ app.add_middleware(
 
 # Constantes de Compatibilidad
 RATIO_MAP = {
-    "4:5": "3:4",
-    "5:4": "4:3"
+    "4:5": "match_input_image",
+    "5:4": "match_input_image"
 }
 
 # Modelos de Datos (Compatibles con el ecosistema existente)
