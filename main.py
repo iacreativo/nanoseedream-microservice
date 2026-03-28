@@ -61,10 +61,11 @@ async def edit_image(request: SeedreamRequest):
         # 2. Preparación de Referencias
         image_input = [request.image_url]
         if request.reference_image_urls:
-            if isinstance(request.reference_image_urls, list):
-                image_input.extend(request.reference_image_urls)
-            else:
-                image_input.append(request.reference_image_urls)
+            # Filtrar strings vacíos
+            refs = request.reference_image_urls if isinstance(request.reference_image_urls, list) else [request.reference_image_urls]
+            valid_refs = [r for r in refs if r and r.strip()]
+            if valid_refs:
+                image_input.extend(valid_refs)
         
         # 3. Lógica de Aspect Ratio (Mapeo Silencioso)
         final_ratio = RATIO_MAP.get(request.image_aspect_ratio, request.image_aspect_ratio)
@@ -83,7 +84,7 @@ async def edit_image(request: SeedreamRequest):
                         "image_input": image_input,
                         "size": "3K",  # Resolución fija a 3K (máximo del modelo)
                         "aspect_ratio": final_ratio,
-                        "output_format": "jpg",
+                        "output_format": "jpeg",
                         "max_images": 5
                     }
                 ),
