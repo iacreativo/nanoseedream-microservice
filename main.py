@@ -118,13 +118,19 @@ async def agentic_translate(user_prompt: str) -> str:
 async def edit_image(request: SeedreamRequest):
     start_time = time.time()
     
+    logger.info(f"=== ENDPOINT CALLED ===")
+    logger.info(f"Request prompt: {request.prompt}")
+    logger.info(f"Request image_url: {request.image_url[:50] if request.image_url else 'None'}...")
+    
     if not REPLICATE_API_TOKEN:
+        logger.error("REPLICATE_API_TOKEN is missing!")
         raise HTTPException(status_code=500, detail="REPLICATE_API_TOKEN is missing")
 
     try:
         # 1. Traducción Agéntica del Prompt
+        logger.info("Starting prompt translation...")
         translated_prompt = await agentic_translate(request.prompt)
-        logger.info(f"Original: {request.prompt[:30]}... -> Traducido: {translated_prompt[:50]}...")
+        logger.info(f"Translation result: {translated_prompt[:100] if translated_prompt else 'NONE'}")
 
         # 2. Preparación de Referencias
         image_input = [request.image_url]
@@ -148,7 +154,7 @@ async def edit_image(request: SeedreamRequest):
                     "image_input": image_input,
                     "size": "3K",
                     "aspect_ratio": final_ratio,
-                    "output_format": "jpg"
+                    "output_format": "jpeg"
                 }
             ),
             timeout=REPLICATE_TIMEOUT
