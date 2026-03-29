@@ -44,6 +44,7 @@ RATIO_MAP = {
 class SeedreamRequest(BaseModel):
     image_url: str
     prompt: str
+    negative_prompt: Optional[str] = ""
     reference_image_urls: Optional[Union[str, List[str]]] = None
     image_aspect_ratio: Optional[str] = "1:1"
 
@@ -56,53 +57,51 @@ class SeedreamResponse(BaseModel):
     execution_time: float
     metadata: Optional[Dict[str, Any]] = None
 
-async def agentic_translate(user_prompt: str) -> str:
+async def agentic_translate(user_prompt: str, negative_prompt: str = "") -> str:
     """
-    Usa Llama-3-8B-Instruct para convertir un prompt descriptivo de Nanobanana 
-    en una instrucción narrativa optimizada para SeeDream-5-Lite.
+    Usa un LLM como un 'Puente Transparente' para SeeDream-5-Lite. 
+    Preserva el lenguaje técnico del usuario y solo añade la estructura necesaria.
     """
     system_prompt = (
-        "You are a prompt translator for SeeDream-5-Lite. Transform the NanoBanana 'prompt' field into narrative instructions for SeeDream.\n\n"
-        "CRITICAL - IGNORE ANALYSIS SECTIONS:\n"
-        "The input may contain JSON with fields like 'scene_analysis', 'subject_anatomy', 'marks_detected', 'lighting_design'. "
-        "These are ANALYSIS for internal use. DO NOT include them in the output.\n"
-        "ONLY translate the content from the 'prompt' field.\n\n"
-        "CRITICAL - IMAGE INPUT STRUCTURE:\n"
-        "- If prompt says 'Image 1 Left is the Target' + 'Reference (Right)':\n"
-        "  START WITH: 'Image 1 Left is the target photo to edit. The Right image is the reference for style/elements to apply.'\n"
-        "- If prompt says 'Image 1 is the original photo' + 'additional images are face reference crops':\n"
-        "  START WITH: 'Image 1 is the target photo to edit. The additional images are face reference crops. Use each face reference to preserve that person's exact facial identity.'\n"
-        "- If NO reference images mentioned:\n"
-        "  START WITH: 'Keeping the exact facial features, bone structure, pose, body positioning, and framing completely unchanged...'\n\n"
-        "CRITICAL - IDENTITY PRESERVATION:\n"
-        "When prompt mentions 'Identity Lock', 'Zero head-swaps', 'Zero skeletal deformation':\n"
-        "- Include these EXACT phrases in the opening\n"
-        "- Describe EACH subject with their specific characteristics as listed in the prompt\n\n"
-        "CRITICAL - BANNER AND ANNOTATIONS:\n"
-        "When prompt mentions 'bottom-banner text', 'visual annotations', 'arrows':\n"
-        "- Include: 'Translate all visual annotations and the bottom-banner text into photorealistic edits'\n"
-        "- Include: 'Transfer elements from the Reference to the Target as indicated'\n\n"
-        "SECTIONS TO TRANSLATE (in order):\n"
-        "1. OPENING (based on image structure)\n"
-        "2. IDENTITY LOCK (if present)\n"
-        "3. TECHNIQUE - name and description from the 'prompt' field only\n"
-        "4. LIGHTING/COMPOSITION - technical specs from 'prompt' field\n"
-        "5. CAMERA/AESTHETIC - from 'prompt' field\n"
-        "6. CLOSING: 'extremely sharp focus, high-resolution 8k, detailed skin texture, raw photo style, professional color grading.'\n\n"
-        "RULE: Only use content from the 'prompt' field. IGNORE scene_analysis, lighting_design, and other analysis sections."
+        "You are a 'Transparent Bridge' for SeeDream-5-Lite. Your goal is to PRESERVE the user's exact "
+        "technical language while adding the structural overhead SeeDream needs.\n\n"
+        
+        "CRITICAL - IMAGE ROLES (Start with this):\n"
+        "- If the request seems to involve multiple images (target and references):\n"
+        "  'Image 1 is the target photo to edit. Additional images are face/style reference crops.'\n"
+        "- If no references are mentioned or present:\n"
+        "  'Keeping the subject's exact facial features, pose, and structure completely unchanged...'\n\n"
+        
+        "CRITICAL - LITERAL PRESERVATION:\n"
+        "DO NOT PARAPHRASE. Use the exact technical terms from the user (e.g., '2:1 ratio', 'HSS', 'cobalt blue', '100MP'). "
+        "Do not try to make it 'flow better' if it costs technical precision. Keep identifying markers like 'ABSOLUTE IDENTITY LOCK' intact.\n\n"
+        
+        "CRITICAL - NEGATIVE PROMPT:\n"
+        "If a negative prompt is provided, append it at the end as follows: "
+        "'STRICTLY AVOID these elements: [negative_prompt content]'.\n\n"
+        
+        "CRITICAL - CLOSING:\n"
+        "Always end the prompt with: 'extremely sharp focus, high-resolution 8k, detailed skin texture, raw photo style, professional color grading.'\n\n"
+        
+        "RULE: Just merge the pieces into one single, technical narrative paragraph. "
+        "Ignore any 'scene_analysis' or internal meta-fields. Return ONLY the final prompt."
     )
+    
+    # Construir el input para el LLM incluyendo el negative prompt si existe
+    llm_input = user_prompt
+    if negative_prompt:
+        llm_input += f"\n\nNEGATIVE_PROMPT: {negative_prompt}"
     
     try:
         start_t = time.time()
-        # Llamada a Llama-3 para 'agenciar' el prompt
         output = await asyncio.to_thread(
             replicate.run,
             LLM_MODEL,
             input={
-                "prompt": user_prompt,
+                "prompt": llm_input,
                 "system_prompt": system_prompt,
                 "max_new_tokens": 2000,
-                "temperature": 0.3
+                "temperature": 0.2
             }
         )
         # Combinar la salida si es una lista (Replicate suele devolver generadores/listas para LLMs)
@@ -151,7 +150,7 @@ async def edit_image(request: SeedreamRequest):
     try:
         # 1. Traducción Agéntica del Prompt
         logger.info("Starting prompt translation...")
-        translated_prompt = await agentic_translate(request.prompt)
+        translated_prompt = await agentic_translate(request.prompt, request.negative_prompt)
         logger.info(f"Translation result: {translated_prompt[:100] if translated_prompt else 'NONE'}")
 
         # 2. Preparación de Referencias
