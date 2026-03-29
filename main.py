@@ -79,7 +79,7 @@ async def agentic_translate(user_prompt: str) -> str:
             input={
                 "prompt": user_prompt,
                 "system_prompt": system_prompt,
-                "max_new_tokens": 150,
+                "max_new_tokens": 2000,
                 "temperature": 0.3
             }
         )
@@ -102,12 +102,17 @@ async def agentic_translate(user_prompt: str) -> str:
                 full_translation = full_translation[len(prefix):].strip()
                 lower_translation = full_translation.lower()
         
-        logger.info(f"Traducción Agéntica (LLM) completada en {time.time() - start_t:.2f}s")
+        # Asegurar que siempre sea string
+        if not full_translation:
+            full_translation = f"Keeping the subject intact, modify: {user_prompt}. Detailed 8k raw photo quality."
+        
+        logger.info(f"Traducción Agéntica (LLM) completada en {time.time() - start_t:.2f}s -> {full_translation[:50]}...")
         return full_translation
     except Exception as e:
-        logger.error(f"Error en traducción LLM, usando fallback: {str(e)}")
-        # Fallback de emergencia estilo Wrapper
-        return f"Keeping the subject intact, modify the image to: {user_prompt}. Detailed 8k raw photo quality."
+        logger.error(f"Error en traducción LLM: {str(e)}")
+        fallback = f"Keeping the subject intact, modify the image to: {user_prompt}. Detailed 8k raw photo quality."
+        logger.info(f"USING FALLBACK: {fallback[:50]}...")
+        return fallback
 
 @app.post("/v1/edit", response_model=SeedreamResponse)
 async def edit_image(request: SeedreamRequest):
@@ -130,6 +135,8 @@ async def edit_image(request: SeedreamRequest):
         
         # 3. Mapeo de Ratio
         final_ratio = RATIO_MAP.get(request.image_aspect_ratio, request.image_aspect_ratio)
+        
+        logger.info(f"SEND TO SEEDREAM -> prompt: {translated_prompt[:80] if translated_prompt else 'NULL'}...")
         
         # 4. Ejecución de SeeDream-5-Lite
         output = await asyncio.wait_for(
