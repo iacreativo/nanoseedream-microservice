@@ -19,7 +19,7 @@ app = FastAPI(title="NanoSeedream Microservice", version="1.1.0")
 # Replicate Settings
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 REPLICATE_TIMEOUT = int(os.getenv("REPLICATE_TIMEOUT", "300"))
-LLM_MODEL = "meta/meta-llama-3-8b-instruct"
+LLM_MODEL = "openai/gpt-4o-mini"
 SEEDREAM_MODEL = "bytedance/seedream-5-lite"
 
 # Habilitar CORS
