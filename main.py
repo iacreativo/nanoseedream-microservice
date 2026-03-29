@@ -30,15 +30,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ratios soportados por Seedream (ratio exacto = ratio enviado)
+# Mapeo de Aspect Ratio para Seedream
 RATIO_MAP = {
+    "4:5": "match_input_image",
+    "5:4": "match_input_image",
     "1:1": "1:1",
     "16:9": "16:9",
     "4:3": "4:3",
     "3:4": "3:4",
-    "9:16": "9:16",
-    "4:5": "4:5",
-    "5:4": "5:4"
+    "9:16": "9:16"
 }
 
 class SeedreamRequest(BaseModel):
@@ -86,6 +86,22 @@ async def agentic_translate(user_prompt: str) -> str:
         # Combinar la salida si es una lista (Replicate suele devolver generadores/listas para LLMs)
         full_translation = "".join(output).strip() if isinstance(output, list) else str(output).strip()
         
+        # Limpiar prefijos no deseados del LLM
+        unwanted_prefixes = [
+            "here is the translated prompt:",
+            "here's the translated prompt:",
+            "the translated prompt is:",
+            "translated prompt:",
+            "here is the translation:",
+            "here's the translation:",
+            "translation:",
+        ]
+        lower_translation = full_translation.lower()
+        for prefix in unwanted_prefixes:
+            if lower_translation.startswith(prefix):
+                full_translation = full_translation[len(prefix):].strip()
+                lower_translation = full_translation.lower()
+        
         logger.info(f"Traducción Agéntica (LLM) completada en {time.time() - start_t:.2f}s")
         return full_translation
     except Exception as e:
@@ -112,8 +128,8 @@ async def edit_image(request: SeedreamRequest):
             valid_refs = [r for r in refs if r and r.strip()]
             image_input.extend(valid_refs)
         
-        # 3. Ratio directo (sin conversión)
-        final_ratio = request.image_aspect_ratio
+        # 3. Mapeo de Ratio
+        final_ratio = RATIO_MAP.get(request.image_aspect_ratio, request.image_aspect_ratio)
         
         # 4. Ejecución de SeeDream-5-Lite
         output = await asyncio.wait_for(
