@@ -14,13 +14,121 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="NanoSeedream Microservice", version="1.1.0")
+app = FastAPI(title="NanoSeedream Microservice", version="1.2.0")
 
 # Replicate Settings
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 REPLICATE_TIMEOUT = int(os.getenv("REPLICATE_TIMEOUT", "300"))
 LLM_MODEL = "openai/gpt-4o-mini"
 SEEDREAM_MODEL = "bytedance/seedream-5-lite"
+
+SEEDREAM_COMPILER_SYSTEM_PROMPT = """You are not a generic prompt improver. You are a specialized 'Nano Banana Pro -> Seedream 5 Visual Compiler'.
+
+Your job is to convert image editing prompts originally written for Nano Banana Pro into a single high-performance Seedream 5 edit prompt.
+
+The input may be:
+- plain natural language
+- a JSON object
+- a JSON-like block wrapped in markdown fences
+- a hybrid prompt with fields such as:
+  - edit_name
+  - model_version
+  - scene_analysis
+  - parameters
+  - prompt
+  - negative_prompt
+
+Your task is to COMPILE the source prompt into Seedream-native visual language.
+
+PRIMARY GOAL:
+Preserve the user's creative intent exactly, but rewrite it in the way Seedream 5 best understands:
+- explicit visual instructions
+- explicit preservation constraints
+- explicit lighting geometry
+- explicit material / texture behavior
+- explicit background exposure behavior
+- explicit relationships between subject, light, and environment
+
+Do NOT summarize.
+Do NOT simplify away technical meaning.
+Do NOT paraphrase if paraphrasing reduces precision.
+
+INPUT PRIORITY:
+1. The internal 'prompt' field is the MAIN creative instruction.
+2. 'scene_analysis' is CRITICAL SUPPORTING CONTEXT and MUST be used, especially subjects, environment, and action / lighting intent.
+3. 'negative_prompt' must be extracted and converted into a final exclusion clause.
+4. 'parameters' are NOT literal Seedream parameters, but may contain semantic hints:
+   - preserve_identity=true -> strengthen preservation language
+   - image_strength low -> preserve composition/pose/structure more aggressively
+   - image_strength medium -> allow moderate transformation
+   - image_strength high -> allow stronger visual restyling
+   - guidance_scale high -> obey all specified details more literally
+   - steps / safety_filter -> ignore unless they imply creative intent
+5. Ignore labels like edit_name/model_version unless they clarify aesthetic intent.
+
+If the input contains markdown code fences like ```json, ignore the fences and read the content.
+
+CORE CONVERSION RULES:
+1. Preserve exact expert terms when they matter: HSS, 2:1 ratio, 100MP, ABSOLUTE IDENTITY LOCK, Rembrandt lighting, clamshell, rim light, beauty dish, tungsten practical, anamorphic flare, etc.
+2. Never discard identity preservation. If the source implies identity preservation, make it explicit in Seedream terms: preserve exact facial structure, jawline, eye shape, proportions, pose, framing, wardrobe unless explicitly changed, body volume, and background geometry unless explicitly changed.
+3. Convert model-specific control into visual control. Nano Banana style controls must become visible scene instructions, not hidden model jargon.
+
+LIGHTING COMPILER (MOST IMPORTANT):
+For every lighting instruction, translate it into explicit visual descriptions across as many of these dimensions as needed:
+- source
+- position relative to subject and camera
+- direction and height
+- quality (soft, diffused, hard, crisp, focused, broad, wraparound, specular)
+- color / temperature
+- key / fill / rim / ambient hierarchy
+- shadow behavior
+- material response on skin, fabric, metal, glass, foliage, wet surfaces, and hair
+- background exposure and separation
+
+STANDARD LIGHTING EXPANSION RULES:
+- HSS exterior daylight -> describe a bright ambient daytime background intentionally underexposed while a powerful off-camera flash dominates the subject; mention stronger separation, deeper background color saturation, richer greens/blues, and controlled flash-shaped shadows.
+- hard editorial strobe -> crisp directional flash, high micro-contrast, defined shadow edges, strong specular highlights, dramatic separation.
+- soft beauty lighting -> smooth flattering frontal lighting, controlled catchlights, minimized under-eye shadows, polished skin texture without plastic smoothing.
+- clamshell -> soft key light above camera plus softer fill from below, with even facial illumination and clean beauty shadows.
+- butterfly lighting -> frontal elevated key light with a delicate shadow under the nose and sculpted cheek structure.
+- Rembrandt -> 45-degree side key light with a triangular patch of light on the shadow-side cheek.
+- rim light -> narrow edge light on hair, shoulders, or silhouette to clarify separation from the background.
+- cinematic backlight -> strong light from behind or behind-side, with atmospheric glow, edge separation, and softer frontal fill.
+- window light -> broad directional daylight from one side with gradual falloff and natural shadow transition.
+- neon lighting -> colored directional spill, mixed hues on skin/clothing, and realistic colored reflections in the scene.
+- golden hour -> low-angle warm sunlight, long soft shadows, amber rim highlights, warm atmospheric glow.
+
+If shorthand is ambiguous, infer the most standard professional interpretation and express it visually and physically without hedging.
+
+SEEDREAM-SPECIFIC WRITING STYLE:
+Write one single coherent prompt paragraph in strong visual natural language.
+The final prompt should generally follow this logic:
+1. image role / subject preservation
+2. subject and wardrobe / object description
+3. change being applied
+4. lighting setup in explicit detail
+5. background and environment behavior
+6. texture / material / shadow / highlight behavior
+7. final image character / quality target
+
+NEGATIVE PROMPT HANDLING:
+If a negative prompt exists, append this exact style of ending:
+'STRICTLY AVOID these elements: ...'
+Keep the user's negative terms as literally as possible.
+
+OUTPUT RESTRICTIONS:
+- Return ONLY the final Seedream 5 prompt.
+- Do NOT return JSON.
+- Do NOT explain your reasoning.
+- Do NOT mention scene_analysis explicitly.
+- Do NOT output bullet points.
+- Do NOT output markdown fences.
+
+QUALITY CLOSING RULE:
+Do NOT force the same closing for every genre.
+If the source prompt is photoreal / editorial / portrait / product, end with a fitting quality close such as: 'extremely sharp focus, high-resolution detail, realistic skin texture, precise material rendering, professional color grading.'
+If the source prompt is illustrative / painterly / diagrammatic / stylized, use a genre-appropriate closing instead of 'raw photo style'.
+Preserve the modality of the original prompt. Never force photorealism onto non-photoreal prompts."""
 
 # Habilitar CORS
 app.add_middleware(
@@ -57,40 +165,53 @@ class SeedreamResponse(BaseModel):
     execution_time: float
     metadata: Optional[Dict[str, Any]] = None
 
-async def agentic_translate(user_prompt: str, negative_prompt: str = "") -> str:
-    """
-    Usa un LLM como un 'Puente Transparente' para SeeDream-5-Lite. 
-    Preserva el lenguaje técnico del usuario y solo añade la estructura necesaria.
-    """
-    system_prompt = (
-        "You are a 'Transparent Bridge' for SeeDream-5-Lite. Your goal is to PRESERVE the user's exact "
-        "technical language while adding the structural overhead SeeDream needs.\n\n"
-        
-        "CRITICAL - IMAGE ROLES (Start with this):\n"
-        "- If the request seems to involve multiple images (target and references):\n"
-        "  'Image 1 is the target photo to edit. Additional images are face/style reference crops.'\n"
-        "- If no references are mentioned or present:\n"
-        "  'Keeping the subject's exact facial features, pose, and structure completely unchanged...'\n\n"
-        
-        "CRITICAL - LITERAL PRESERVATION:\n"
-        "DO NOT PARAPHRASE. Use the exact technical terms from the user (e.g., '2:1 ratio', 'HSS', 'cobalt blue', '100MP'). "
-        "Do not try to make it 'flow better' if it costs technical precision. Keep identifying markers like 'ABSOLUTE IDENTITY LOCK' intact.\n\n"
-        
-        "CRITICAL - NEGATIVE PROMPT:\n"
-        "If a negative prompt is provided, append it at the end as follows: "
-        "'STRICTLY AVOID these elements: [negative_prompt content]'.\n\n"
-        
-        "CRITICAL - CLOSING:\n"
-        "Always end the prompt with: 'extremely sharp focus, high-resolution 8k, detailed skin texture, raw photo style, professional color grading.'\n\n"
-        
-        "RULE: Just merge the pieces into one single, technical narrative paragraph. "
-        "Ignore any 'scene_analysis' or internal meta-fields. Return ONLY the final prompt."
-    )
-    
-    # Construir el input para el LLM incluyendo el negative prompt si existe
-    llm_input = user_prompt
+
+def strip_markdown_code_fences(text: str) -> str:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2:
+            lines = lines[1:-1]
+            cleaned = "\n".join(lines).strip()
+    return cleaned
+
+
+def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_count: int = 0) -> str:
+    source_prompt = strip_markdown_code_fences(user_prompt)
+    has_references = reference_count > 0
+
+    sections = [
+        "You are receiving a source prompt authored for Nano Banana Pro that must be compiled into Seedream 5 visual language.",
+        "Use the entire source payload, including any JSON fields such as scene_analysis, parameters, prompt, and negative_prompt.",
+        "Treat scene_analysis as high-value context, not as disposable metadata.",
+        "Convert hidden model-jargon into explicit visible instructions, especially for lighting, background exposure, and subject separation.",
+        "Return only the final compiled Seedream 5 prompt.",
+        "",
+        "IMAGE ROLE CONTEXT:",
+        "Image 1 is the target photo to edit." if has_references else "Single target image only.",
+        f"Additional images are face/style reference crops ({reference_count})." if has_references else "No additional reference crops were provided outside the target image.",
+        "",
+        "SOURCE PROMPT START",
+        source_prompt,
+        "SOURCE PROMPT END",
+    ]
+
     if negative_prompt:
-        llm_input += f"\n\nNEGATIVE_PROMPT: {negative_prompt}"
+        sections.extend([
+            "",
+            "EXTERNAL NEGATIVE PROMPT START",
+            negative_prompt.strip(),
+            "EXTERNAL NEGATIVE PROMPT END",
+            "If both an internal and external negative prompt exist, merge them without losing any explicit exclusions.",
+        ])
+
+    return "\n".join(sections).strip()
+
+async def agentic_translate(user_prompt: str, negative_prompt: str = "", reference_count: int = 0) -> str:
+    """
+    Usa un LLM como compilador de prompts Nano Banana -> Seedream 5.
+    """
+    llm_input = build_compiler_input(user_prompt, negative_prompt, reference_count)
     
     try:
         start_t = time.time()
@@ -99,7 +220,7 @@ async def agentic_translate(user_prompt: str, negative_prompt: str = "") -> str:
             LLM_MODEL,
             input={
                 "prompt": llm_input,
-                "system_prompt": system_prompt,
+                "system_prompt": SEEDREAM_COMPILER_SYSTEM_PROMPT,
                 "max_new_tokens": 2000,
                 "temperature": 0.2
             }
@@ -125,13 +246,17 @@ async def agentic_translate(user_prompt: str, negative_prompt: str = "") -> str:
         
         # Asegurar que siempre sea string
         if not full_translation:
-            full_translation = f"Keeping the subject intact, modify: {user_prompt}. Detailed 8k raw photo quality."
+            cleaned_source = strip_markdown_code_fences(user_prompt)
+            full_translation = f"Keeping the subject's exact identity, pose, structure, and composition unchanged, edit the image according to this Seedream-compiled intent: {cleaned_source}"
         
         logger.info(f"Traducción Agéntica (LLM) completada en {time.time() - start_t:.2f}s -> {full_translation[:50]}...")
         return full_translation
     except Exception as e:
         logger.error(f"Error en traducción LLM: {str(e)}")
-        fallback = f"Keeping the subject intact, modify the image to: {user_prompt}. Detailed 8k raw photo quality."
+        cleaned_source = strip_markdown_code_fences(user_prompt)
+        fallback = f"Keeping the subject's exact identity, pose, structure, and composition unchanged, edit the image according to this Seedream-compiled intent: {cleaned_source}"
+        if negative_prompt:
+            fallback += f" STRICTLY AVOID these elements: {negative_prompt.strip()}"
         logger.info(f"USING FALLBACK: {fallback[:50]}...")
         return fallback
 
@@ -148,20 +273,23 @@ async def edit_image(request: SeedreamRequest):
         raise HTTPException(status_code=500, detail="REPLICATE_API_TOKEN is missing")
 
     try:
-        # 1. Traducción Agéntica del Prompt
-        logger.info("Starting prompt translation...")
-        translated_prompt = await agentic_translate(request.prompt, request.negative_prompt)
-        logger.info(f"Translation result: {translated_prompt[:100] if translated_prompt else 'NONE'}")
-
-        # 2. Preparación de Referencias
+        # 1. Preparación de Referencias
         image_input = [request.image_url]
+        reference_count = 0
         if request.reference_image_urls:
             refs = request.reference_image_urls if isinstance(request.reference_image_urls, list) else [request.reference_image_urls]
             valid_refs = [r for r in refs if r and r.strip()]
+            reference_count = len(valid_refs)
             image_input.extend(valid_refs)
+
+        # 2. Traducción/Compilación del Prompt
+        logger.info("Starting prompt translation...")
+        translated_prompt = await agentic_translate(request.prompt, request.negative_prompt or "", reference_count)
+        logger.info(f"Translation result: {translated_prompt[:100] if translated_prompt else 'NONE'}")
         
         # 3. Mapeo de Ratio
-        final_ratio = RATIO_MAP.get(request.image_aspect_ratio, request.image_aspect_ratio)
+        requested_ratio = request.image_aspect_ratio or "1:1"
+        final_ratio = RATIO_MAP.get(requested_ratio, requested_ratio)
         
         logger.info(f"SEND TO SEEDREAM -> prompt: {translated_prompt[:80] if translated_prompt else 'NULL'}...")
         
