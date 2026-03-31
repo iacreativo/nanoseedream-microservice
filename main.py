@@ -142,7 +142,43 @@ QUALITY CLOSING RULE:
 Do NOT force the same closing for every genre.
 If the source prompt is photoreal / editorial / portrait / product, end with a fitting quality close such as: 'extremely sharp focus, high-resolution detail, realistic skin texture, precise material rendering, professional color grading.'
 If the source prompt is illustrative / painterly / diagrammatic / stylized, use a genre-appropriate closing instead of 'raw photo style'.
-Preserve the modality of the original prompt. Never force photorealism onto non-photoreal prompts."""
+Preserve the modality of the original prompt. Never force photorealism onto non-photoreal prompts.
+
+LIGHT HIERARCHY AND FACE SAFETY RULES:
+- In portraits, the face must remain readable unless the user explicitly requests silhouette, harsh backlight, or face-obscuring contrast.
+- If the source asks for soft, diffuse, wraparound, uniform, flattering, beauty, or gentle light, make the dominant light frontal or front three-quarter and describe smooth facial illumination, soft transitions, low-contrast shadow edges, and even skin exposure.
+- Rim light is secondary by default unless the user explicitly asks for strong rim, heavy backlight, or silhouette.
+- Do not let rim light or backlight dominate the face unless explicitly requested.
+- If rim light exists in a portrait, constrain it to hairline, outer shoulders, or silhouette edges, and explicitly prevent backlight spill across the cheeks, nose bridge, eye sockets, or front planes of the face unless the source asks for that effect.
+- If the source requests soft light and rim light at the same time, preserve the soft face lighting first and keep the rim subtle.
+
+SOFT / DIFFUSE / UNIFORM LIGHT TRANSLATION RULES:
+- 'soft light' -> broad flattering key light, smooth shadow falloff, no harsh edge transitions.
+- 'diffuse light' -> low-specular, evenly dispersed illumination, gentle contrast, no hard shadow lines.
+- 'uniform light' -> even facial exposure across both sides of the face while preserving dimensionality.
+- 'wraparound light' -> the key light softly wraps across facial curves and dress folds without flattening the subject.
+- 'flattering light' -> clean catchlights, controlled under-eye shadows, natural skin texture, no plastic smoothing.
+
+LIGHTING INTENSITY DIALECT:
+If the source includes semantic intensity controls such as key:+0.3, fill:+0.1, rim:-0.4, spill:-0.8, softness:+0.5, wrap:+0.4, ambient:-0.6, interpret them as guidance for the final visual description.
+- Positive values mean increase emphasis.
+- Negative values mean reduce emphasis.
+- Larger magnitude means stronger adjustment.
+- Translate them into natural language, never echo them literally unless needed for clarity.
+
+INTENSITY MAPPING RULES:
+- key:+x -> make the key light more dominant on the face and torso.
+- fill:+x -> soften facial contrast and lift shadow density without flattening structure.
+- rim:+x -> increase edge separation only on silhouette boundaries.
+- rim:-x -> keep rim light faint, narrow, and secondary.
+- spill:-x -> explicitly suppress backlight or rim spill on facial planes.
+- softness:+x -> broaden and soften the light source, creating smoother transitions.
+- wrap:+x -> increase gentle wrap across facial features and fabric contours.
+- ambient:-x -> darken or suppress ambient/background exposure relative to the subject.
+- contrast:+x -> deepen subject modeling and shadow definition.
+- contrast:-x -> reduce harshness while retaining form.
+
+If no explicit intensity dialect is present but the source strongly implies a soft portrait look, infer low rim intensity, low spill, medium-to-high softness, and controlled fill."""
 
 # Habilitar CORS
 app.add_middleware(
@@ -201,6 +237,7 @@ def parse_source_prompt(user_prompt: str) -> Dict[str, Any]:
         "scene_subjects": "",
         "scene_environment": "",
         "lighting_intent": "",
+        "lighting_controls": {},
         "parameters": {},
         "internal_negative_prompt": "",
     }
@@ -228,10 +265,27 @@ def parse_source_prompt(user_prompt: str) -> Dict[str, Any]:
             parameters = data.get("parameters", {})
             if isinstance(parameters, dict):
                 parsed["parameters"] = parameters
+
+            lighting_controls = (
+                data.get("lighting_controls", {})
+                or data.get("lighting_control", {})
+                or data.get("light_controls", {})
+                or {}
+            )
+            if isinstance(lighting_controls, dict):
+                parsed["lighting_controls"] = lighting_controls
     except Exception:
         pass
 
     return parsed
+
+
+def format_control_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:+.2f}"
+    if isinstance(value, int):
+        return f"{value:+d}"
+    return str(value)
 
 
 def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_count: int = 0) -> str:
@@ -245,6 +299,23 @@ def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_
         for key in ["preserve_identity", "image_strength", "guidance_scale", "steps", "safety_filter"]:
             if key in parameters:
                 semantic_hints.append(f"- {key}: {parameters[key]}")
+
+    lighting_hints = []
+    lighting_controls = source.get("lighting_controls", {}) or {}
+    if isinstance(lighting_controls, dict) and lighting_controls:
+        ordered_keys = [
+            "key", "key_intensity", "fill", "fill_intensity", "rim", "rim_intensity",
+            "spill", "backlight_spill", "softness", "wrap", "ambient", "ambient_suppression",
+            "contrast", "face_priority", "background_priority"
+        ]
+        seen = set()
+        for key in ordered_keys:
+            if key in lighting_controls:
+                lighting_hints.append(f"- {key}: {format_control_value(lighting_controls[key])}")
+                seen.add(key)
+        for key, value in lighting_controls.items():
+            if key not in seen:
+                lighting_hints.append(f"- {key}: {format_control_value(value)}")
 
     sections = [
         "You are receiving a source prompt authored for Nano Banana Pro that must be compiled into Seedream 5 visual language.",
@@ -277,6 +348,8 @@ def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_
         sections.extend(["", "SCENE ENVIRONMENT:", source["scene_environment"]])
     if source.get("lighting_intent"):
         sections.extend(["", "LIGHTING INTENT / ACTION:", source["lighting_intent"]])
+    if lighting_hints:
+        sections.extend(["", "LIGHTING INTENSITY CONTROLS:", *lighting_hints])
     if semantic_hints:
         sections.extend(["", "SEMANTIC CONTROL HINTS:", *semantic_hints])
     if source.get("internal_negative_prompt"):
@@ -294,7 +367,7 @@ def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_
     sections.extend([
         "",
         "FINAL INSTRUCTION:",
-        "Compile the source into Seedream-native instructions with explicit preservation, explicit lighting geometry, explicit subject-vs-background exposure behavior, and explicit material response."
+        "Compile the source into Seedream-native instructions with explicit preservation, explicit lighting geometry, explicit subject-vs-background exposure behavior, explicit material response, and safe face-light hierarchy. If the requested lighting is soft, diffuse, uniform, or flattering, preserve readable frontal-to-three-quarter facial illumination and keep rim/backlight secondary unless the source explicitly requests the opposite."
     ])
 
     return "\n".join(sections).strip()
