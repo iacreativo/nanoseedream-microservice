@@ -147,10 +147,14 @@ Preserve the modality of the original prompt. Never force photorealism onto non-
 LIGHT HIERARCHY AND FACE SAFETY RULES:
 - In portraits, the face must remain readable unless the user explicitly requests silhouette, harsh backlight, or face-obscuring contrast.
 - If the source asks for soft, diffuse, wraparound, uniform, flattering, beauty, or gentle light, make the dominant light frontal or front three-quarter and describe smooth facial illumination, soft transitions, low-contrast shadow edges, and even skin exposure.
+- In portrait relighting, the default visual priority order is: face first, upper torso second, hands or bouquet third, dress fourth, environment last, unless the user explicitly requests a different hierarchy.
+- When the prompt implies off-camera flash, exterior strobist lighting, HSS, commercial portraiture, or re-lighting of an overexposed image, make the subject key light dominate the face and upper body more strongly than the ambient sunlight.
+- If the environment is bright or overexposed, re-balance the image by rebuilding the subject lighting first; do not preserve washed ambient light on the face just because it is physically plausible.
 - Rim light is secondary by default unless the user explicitly asks for strong rim, heavy backlight, or silhouette.
 - Do not let rim light or backlight dominate the face unless explicitly requested.
 - If rim light exists in a portrait, constrain it to hairline, outer shoulders, or silhouette edges, and explicitly prevent backlight spill across the cheeks, nose bridge, eye sockets, or front planes of the face unless the source asks for that effect.
 - If the source requests soft light and rim light at the same time, preserve the soft face lighting first and keep the rim subtle.
+- If the dress or reflective wardrobe catches strong highlights, keep those highlights secondary to the facial key light; do not let fabric reflections, gown bounce, or lower-frame brightness visually overpower the face.
 
 SOFT / DIFFUSE / UNIFORM LIGHT TRANSLATION RULES:
 - 'soft light' -> broad flattering key light, smooth shadow falloff, no harsh edge transitions.
@@ -177,8 +181,16 @@ INTENSITY MAPPING RULES:
 - ambient:-x -> darken or suppress ambient/background exposure relative to the subject.
 - contrast:+x -> deepen subject modeling and shadow definition.
 - contrast:-x -> reduce harshness while retaining form.
+- face_priority:+x -> make the face the brightest and most readable part of the subject.
+- subject_priority:+x -> make the subject read more strongly than the environment.
+- subject_over_ambient:+x -> ensure the subject key light clearly dominates over sunlight or ambient light on the face and torso.
+- dress_secondary:+x -> explicitly keep dress highlights and fabric bounce below the visual priority of the face.
+- face_exposure:+x -> lift facial exposure and readability without flattening structure.
 
-If no explicit intensity dialect is present but the source strongly implies a soft portrait look, infer low rim intensity, low spill, medium-to-high softness, and controlled fill."""
+If no explicit intensity dialect is present but the source strongly implies a soft portrait look, infer low rim intensity, low spill, medium-to-high softness, controlled fill, positive face priority, and the dress remaining visually secondary to the face.
+
+SUBJECT-FIRST RELIGHTING RULE:
+If the prompt describes re-lighting of a portrait in a bright outdoor environment, especially with HSS or flash language, prioritize rebuilding the subject illumination over preserving the original ambient logic. The face must not sink into shadow while the dress or environment becomes dominant. Keep the facial key light clearly intentional, readable, and visually stronger than environmental bounce or dress reflections."""
 
 # Habilitar CORS
 app.add_middleware(
@@ -306,7 +318,8 @@ def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_
         ordered_keys = [
             "key", "key_intensity", "fill", "fill_intensity", "rim", "rim_intensity",
             "spill", "backlight_spill", "softness", "wrap", "ambient", "ambient_suppression",
-            "contrast", "face_priority", "background_priority"
+            "contrast", "face_priority", "face_exposure", "subject_priority", "subject_over_ambient",
+            "dress_secondary", "background_priority"
         ]
         seen = set()
         for key in ordered_keys:
@@ -367,7 +380,7 @@ def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_
     sections.extend([
         "",
         "FINAL INSTRUCTION:",
-        "Compile the source into Seedream-native instructions with explicit preservation, explicit lighting geometry, explicit subject-vs-background exposure behavior, explicit material response, and safe face-light hierarchy. If the requested lighting is soft, diffuse, uniform, or flattering, preserve readable frontal-to-three-quarter facial illumination and keep rim/backlight secondary unless the source explicitly requests the opposite."
+        "Compile the source into Seedream-native instructions with explicit preservation, explicit lighting geometry, explicit subject-vs-background exposure behavior, explicit material response, and safe face-light hierarchy. If the requested lighting is soft, diffuse, uniform, or flattering, preserve readable frontal-to-three-quarter facial illumination and keep rim/backlight secondary unless the source explicitly requests the opposite. In portrait relighting, keep the face and upper body visually dominant over dress bounce, environmental light, and background drama."
     ])
 
     return "\n".join(sections).strip()
