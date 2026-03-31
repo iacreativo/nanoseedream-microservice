@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import time
 import logging
@@ -14,7 +15,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="NanoSeedream Microservice", version="1.2.0")
+app = FastAPI(title="NanoSeedream Microservice", version="1.3.0")
 
 # Replicate Settings
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
@@ -54,8 +55,8 @@ Do NOT simplify away technical meaning.
 Do NOT paraphrase if paraphrasing reduces precision.
 
 INPUT PRIORITY:
-1. The internal 'prompt' field is the MAIN creative instruction.
-2. 'scene_analysis' is CRITICAL SUPPORTING CONTEXT and MUST be used, especially subjects, environment, and action / lighting intent.
+1. The internal 'prompt' field is the BASE LAYER, not the complete answer.
+2. 'scene_analysis' is CRITICAL CONTEXT and MUST be materially merged into the final output, especially subjects, environment, and action / lighting intent.
 3. 'negative_prompt' must be extracted and converted into a final exclusion clause.
 4. 'parameters' are NOT literal Seedream parameters, but may contain semantic hints:
    - preserve_identity=true -> strengthen preservation language
@@ -66,12 +67,18 @@ INPUT PRIORITY:
    - steps / safety_filter -> ignore unless they imply creative intent
 5. Ignore labels like edit_name/model_version unless they clarify aesthetic intent.
 
+HARD VALIDATION RULE:
+If scene_analysis or other context adds any non-redundant information that is not already fully expressed in the internal prompt, that information MUST appear explicitly in the final prompt. If it is missing, your output is invalid.
+
+Do not merely restate the internal prompt. You must compile and expand it.
+
 If the input contains markdown code fences like ```json, ignore the fences and read the content.
 
 CORE CONVERSION RULES:
 1. Preserve exact expert terms when they matter: HSS, 2:1 ratio, 100MP, ABSOLUTE IDENTITY LOCK, Rembrandt lighting, clamshell, rim light, beauty dish, tungsten practical, anamorphic flare, etc.
 2. Never discard identity preservation. If the source implies identity preservation, make it explicit in Seedream terms: preserve exact facial structure, jawline, eye shape, proportions, pose, framing, wardrobe unless explicitly changed, body volume, and background geometry unless explicitly changed.
 3. Convert model-specific control into visual control. Nano Banana style controls must become visible scene instructions, not hidden model jargon.
+4. When the source references a named lighting formula, style module, or workflow shorthand, translate it into observable lighting behavior in the final image.
 
 LIGHTING COMPILER (MOST IMPORTANT):
 For every lighting instruction, translate it into explicit visual descriptions across as many of these dimensions as needed:
@@ -110,6 +117,13 @@ The final prompt should generally follow this logic:
 5. background and environment behavior
 6. texture / material / shadow / highlight behavior
 7. final image character / quality target
+
+COMPILATION CHECKLIST (apply silently, do not print):
+- Did you explicitly preserve identity, pose, proportions, and composition when required?
+- Did you convert all important lighting shorthand into physical lighting behavior?
+- Did you express ambient/background exposure separately from subject lighting?
+- Did you materialize any useful information from scene_analysis that was not already explicit in the internal prompt?
+- Does the final prompt read like Seedream instructions instead of source JSON?
 
 NEGATIVE PROMPT HANDLING:
 If a negative prompt exists, append this exact style of ending:
@@ -176,34 +190,112 @@ def strip_markdown_code_fences(text: str) -> str:
     return cleaned
 
 
+def parse_source_prompt(user_prompt: str) -> Dict[str, Any]:
+    cleaned = strip_markdown_code_fences(user_prompt)
+    parsed: Dict[str, Any] = {
+        "raw": cleaned,
+        "is_json": False,
+        "edit_name": "",
+        "model_version": "",
+        "internal_prompt": cleaned,
+        "scene_subjects": "",
+        "scene_environment": "",
+        "lighting_intent": "",
+        "parameters": {},
+        "internal_negative_prompt": "",
+    }
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            parsed["is_json"] = True
+            parsed["edit_name"] = str(data.get("edit_name", "") or "")
+            parsed["model_version"] = str(data.get("model_version", "") or "")
+            parsed["internal_prompt"] = str(data.get("prompt", "") or cleaned)
+            parsed["internal_negative_prompt"] = str(data.get("negative_prompt", "") or "")
+
+            scene_analysis = data.get("scene_analysis", {})
+            if isinstance(scene_analysis, dict):
+                parsed["scene_subjects"] = str(scene_analysis.get("subjects", "") or "")
+                parsed["scene_environment"] = str(scene_analysis.get("environment", "") or "")
+                parsed["lighting_intent"] = str(
+                    scene_analysis.get("padilla_action", "")
+                    or scene_analysis.get("lighting_action", "")
+                    or scene_analysis.get("action", "")
+                    or ""
+                )
+
+            parameters = data.get("parameters", {})
+            if isinstance(parameters, dict):
+                parsed["parameters"] = parameters
+    except Exception:
+        pass
+
+    return parsed
+
+
 def build_compiler_input(user_prompt: str, negative_prompt: str = "", reference_count: int = 0) -> str:
-    source_prompt = strip_markdown_code_fences(user_prompt)
+    source = parse_source_prompt(user_prompt)
     has_references = reference_count > 0
+    external_negative = (negative_prompt or "").strip()
+
+    semantic_hints = []
+    parameters = source.get("parameters", {}) or {}
+    if isinstance(parameters, dict) and parameters:
+        for key in ["preserve_identity", "image_strength", "guidance_scale", "steps", "safety_filter"]:
+            if key in parameters:
+                semantic_hints.append(f"- {key}: {parameters[key]}")
 
     sections = [
         "You are receiving a source prompt authored for Nano Banana Pro that must be compiled into Seedream 5 visual language.",
-        "Use the entire source payload, including any JSON fields such as scene_analysis, parameters, prompt, and negative_prompt.",
-        "Treat scene_analysis as high-value context, not as disposable metadata.",
-        "Convert hidden model-jargon into explicit visible instructions, especially for lighting, background exposure, and subject separation.",
         "Return only the final compiled Seedream 5 prompt.",
+        "Do not mirror the source JSON structure. Compile it into one strong visual paragraph.",
+        "Every non-redundant detail from the normalized sections below must be either materialized in the final prompt or deliberately omitted only if it is fully duplicated elsewhere.",
         "",
         "IMAGE ROLE CONTEXT:",
         "Image 1 is the target photo to edit." if has_references else "Single target image only.",
         f"Additional images are face/style reference crops ({reference_count})." if has_references else "No additional reference crops were provided outside the target image.",
         "",
-        "SOURCE PROMPT START",
-        source_prompt,
-        "SOURCE PROMPT END",
+        "NORMALIZED SOURCE SPEC:",
+        f"SOURCE_FORMAT: {'json' if source['is_json'] else 'plain_text'}",
     ]
 
-    if negative_prompt:
+    if source.get("edit_name"):
+        sections.append(f"EDIT_NAME: {source['edit_name']}")
+    if source.get("model_version"):
+        sections.append(f"SOURCE_MODEL_PROFILE: {source['model_version']}")
+
+    sections.extend([
+        "",
+        "MAIN CREATIVE PROMPT:",
+        source.get("internal_prompt", source.get("raw", "")),
+    ])
+
+    if source.get("scene_subjects"):
+        sections.extend(["", "SCENE SUBJECTS:", source["scene_subjects"]])
+    if source.get("scene_environment"):
+        sections.extend(["", "SCENE ENVIRONMENT:", source["scene_environment"]])
+    if source.get("lighting_intent"):
+        sections.extend(["", "LIGHTING INTENT / ACTION:", source["lighting_intent"]])
+    if semantic_hints:
+        sections.extend(["", "SEMANTIC CONTROL HINTS:", *semantic_hints])
+    if source.get("internal_negative_prompt"):
+        sections.extend(["", "INTERNAL NEGATIVE PROMPT:", source["internal_negative_prompt"]])
+
+    if external_negative:
         sections.extend([
             "",
             "EXTERNAL NEGATIVE PROMPT START",
-            negative_prompt.strip(),
+            external_negative,
             "EXTERNAL NEGATIVE PROMPT END",
             "If both an internal and external negative prompt exist, merge them without losing any explicit exclusions.",
         ])
+
+    sections.extend([
+        "",
+        "FINAL INSTRUCTION:",
+        "Compile the source into Seedream-native instructions with explicit preservation, explicit lighting geometry, explicit subject-vs-background exposure behavior, and explicit material response."
+    ])
 
     return "\n".join(sections).strip()
 
